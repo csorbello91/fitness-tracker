@@ -26,7 +26,6 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { ScrollArea } from '@/components/ui/scroll-area'
-import { Separator } from '@/components/ui/separator'
 import { Plus, Trash2, GripVertical, Save, ChevronLeft } from 'lucide-vue-next'
 import { toast } from 'vue-sonner'
 import type { TemplateExercise, Exercise } from '@/types/database'
@@ -38,7 +37,8 @@ const {
   createTemplate,
   updateTemplate,
   addExerciseToTemplate,
-  removeExerciseFromTemplate
+  removeExerciseFromTemplate,
+  updateTemplateExercise
 } = useTemplates()
 const { exercises, fetchExercises, groupByCategory, createExercise } = useExercises()
 
@@ -52,6 +52,7 @@ const loading = ref(true)
 const saving = ref(false)
 const showExercisePicker = ref(false)
 const showNewExerciseForm = ref(false)
+const exerciseSearch = ref('')
 
 // New exercise form
 const newExerciseName = ref('')
@@ -102,7 +103,8 @@ async function handleSave() {
           {
             sets: te.default_sets,
             reps: te.default_reps,
-            weight: te.default_weight || undefined
+            weight: te.default_weight || undefined,
+            notes: te.notes || null
           }
         )
       }
@@ -113,6 +115,14 @@ async function handleSave() {
         name: name.value,
         description: description.value || null
       })
+      await Promise.all(templateExercises.value.map((te, index) => updateTemplateExercise(te.id, {
+        default_sets: te.default_sets,
+        default_reps: te.default_reps,
+        default_weight: te.default_weight,
+        rest_seconds: te.rest_seconds,
+        order_index: index,
+        notes: te.notes
+      })))
       toast.success('Template saved')
     }
 
@@ -147,8 +157,11 @@ function handleAddExercise(exercise: Exercise) {
     addExerciseToTemplate(
       templateId.value!,
       exercise.id,
-      templateExercises.value.length - 1
-    ).catch(() => {
+      templateExercises.value.length - 1,
+      { notes: newExercise.notes }
+    ).then((createdExercise) => {
+      templateExercises.value[templateExercises.value.length - 1] = createdExercise
+    }).catch(() => {
       // Rollback on error
       templateExercises.value.pop()
       toast.error('Failed to add exercise')
@@ -188,7 +201,33 @@ function updateExerciseDefaults(te: TemplateExercise, field: 'sets' | 'reps' | '
   }
 }
 
+function updateExerciseNotes(te: TemplateExercise, value: string) {
+  const index = templateExercises.value.findIndex(e => e.id === te.id)
+  if (index === -1) return
+
+  const exercise = templateExercises.value[index]
+  if (!exercise) return
+
+  exercise.notes = value
+}
+
 const groupedExercises = computed(() => groupByCategory(exercises.value))
+const filteredExercises = computed(() => {
+  const term = exerciseSearch.value.toLowerCase().trim()
+  if (!term) return groupedExercises.value
+
+  const filtered: Record<string, Exercise[]> = {}
+  for (const [category, list] of Object.entries(groupedExercises.value)) {
+    const matches = list.filter(exercise =>
+      exercise.name.toLowerCase().includes(term) ||
+      (exercise.description || '').toLowerCase().includes(term)
+    )
+    if (matches.length > 0) {
+      filtered[category] = matches
+    }
+  }
+  return filtered
+})
 
 function getCategoryLabel(category: string): string {
   const labels: Record<string, string> = {
@@ -377,6 +416,17 @@ function formatMuscleGroup(group: string): string {
                       />
                     </div>
                   </div>
+
+                  <div class="space-y-1">
+                    <Label class="text-xs">Notes</Label>
+                    <Textarea
+                      :model-value="te.notes || ''"
+                      rows="2"
+                      placeholder="e.g., 3 second eccentric"
+                      class="text-sm"
+                      @update:model-value="v => updateExerciseNotes(te, String(v))"
+                    />
+                  </div>
                 </div>
               </div>
             </CardContent>
@@ -405,31 +455,41 @@ function formatMuscleGroup(group: string): string {
           Create New Exercise
         </Button>
 
-        <ScrollArea class="h-[calc(100%-8rem)] mt-4">
-          <div class="space-y-6 pb-8">
-            <div v-for="(categoryExercises, category) in groupedExercises" :key="category">
-              <h3 class="font-semibold text-sm text-muted-foreground uppercase tracking-wide mb-2">
-                {{ getCategoryLabel(category) }}
-              </h3>
+        <div class="mt-4 space-y-3">
+          <Input
+            v-model="exerciseSearch"
+            placeholder="Search exercises"
+            class="h-10"
+          />
 
-              <div class="space-y-1">
-                <button
-                  v-for="exercise in categoryExercises"
-                  :key="exercise.id"
-                  class="w-full text-left px-3 py-2 rounded-lg hover:bg-muted transition-colors"
-                  @click="handleAddExercise(exercise)"
-                >
-                  <p class="font-medium">{{ exercise.name }}</p>
-                  <p v-if="exercise.description" class="text-sm text-muted-foreground truncate">
-                    {{ exercise.description }}
-                  </p>
-                </button>
+          <ScrollArea class="h-[calc(100%-9rem)] pr-1">
+            <div class="space-y-6 pb-8">
+              <div v-for="(categoryExercises, category) in filteredExercises" :key="category" class="px-1 space-y-2">
+                <h3 class="font-semibold text-sm text-muted-foreground uppercase tracking-wide">
+                  {{ getCategoryLabel(category) }}
+                </h3>
+
+                <div class="space-y-1">
+                  <button
+                    v-for="exercise in categoryExercises"
+                    :key="exercise.id"
+                    class="w-full text-left px-3 py-2 rounded-lg hover:bg-muted transition-colors"
+                    @click="handleAddExercise(exercise)"
+                  >
+                    <p class="font-medium">{{ exercise.name }}</p>
+                    <p v-if="exercise.description" class="text-sm text-muted-foreground truncate">
+                      {{ exercise.description }}
+                    </p>
+                  </button>
+                </div>
               </div>
 
-              <Separator class="mt-4" />
+              <p v-if="Object.keys(filteredExercises).length === 0" class="text-center text-sm text-muted-foreground">
+                No exercises match that search.
+              </p>
             </div>
-          </div>
-        </ScrollArea>
+          </ScrollArea>
+        </div>
       </SheetContent>
     </Sheet>
 

@@ -32,6 +32,8 @@ const isImproved = computed(() => {
   return (props.set.target_weight || 0) > props.previousSet.actual_weight
 })
 
+const isSkipped = computed(() => props.set.is_completed && props.set.notes === 'skipped')
+
 function handleQuickConfirm() {
   emit('confirmSame')
 }
@@ -69,9 +71,14 @@ function handleCancel() {
     <!-- Completed State -->
     <template v-if="set.is_completed">
       <div class="flex-1 flex items-center gap-2">
-        <span class="font-medium">{{ set.actual_weight }} kg</span>
-        <span class="text-muted-foreground">x</span>
-        <span class="font-medium">{{ set.actual_reps }}</span>
+        <template v-if="isSkipped">
+          <span class="text-sm italic text-muted-foreground">Skipped</span>
+        </template>
+        <template v-else>
+          <span class="font-medium">{{ set.actual_weight }} kg</span>
+          <span class="text-muted-foreground">x</span>
+          <span class="font-medium">{{ set.actual_reps }}</span>
+        </template>
       </div>
       <Check class="h-5 w-5 text-green-500" />
     </template>
