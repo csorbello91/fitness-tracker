@@ -96,7 +96,7 @@ export function useTemplates() {
     templateId: string,
     exerciseId: string,
     orderIndex: number,
-    defaults?: { sets?: number; reps?: number; weight?: number }
+    defaults?: { sets?: number; reps?: number; weight?: number; notes?: string | null }
   ) {
     const { data, error: err } = await supabase
       .from('template_exercises')
@@ -106,7 +106,9 @@ export function useTemplates() {
         order_index: orderIndex,
         default_sets: defaults?.sets ?? 5,
         default_reps: defaults?.reps ?? 5,
-        default_weight: defaults?.weight ?? null
+        default_weight: defaults?.weight ?? null,
+        rest_seconds: 180,
+        notes: defaults?.notes ?? null
       })
       .select(`
         *,
@@ -127,6 +129,31 @@ export function useTemplates() {
     if (err) throw err
   }
 
+  async function updateTemplateExercise(
+    templateExerciseId: string,
+    updates: Partial<TemplateExercise>
+  ) {
+    const { data, error: err } = await supabase
+      .from('template_exercises')
+      .update({
+        default_sets: updates.default_sets,
+        default_reps: updates.default_reps,
+        default_weight: updates.default_weight ?? null,
+        order_index: updates.order_index,
+        rest_seconds: updates.rest_seconds,
+        notes: updates.notes ?? null
+      })
+      .eq('id', templateExerciseId)
+      .select(`
+        *,
+        exercise:exercises(*)
+      `)
+      .single()
+
+    if (err) throw err
+    return data as TemplateExercise
+  }
+
   return {
     templates,
     loading,
@@ -137,6 +164,7 @@ export function useTemplates() {
     updateTemplate,
     deleteTemplate,
     addExerciseToTemplate,
-    removeExerciseFromTemplate
+    removeExerciseFromTemplate,
+    updateTemplateExercise
   }
 }

@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { supabase } from '@/composables/useSupabase'
-import type { Workout, WorkoutExercise, WorkoutSet, TemplateExercise } from '@/types/database'
+import type { Workout, WorkoutExercise, WorkoutSet, TemplateExercise, Exercise } from '@/types/database'
 
 export const useActiveWorkoutStore = defineStore('activeWorkout', () => {
   // State
@@ -47,11 +47,19 @@ export const useActiveWorkoutStore = defineStore('activeWorkout', () => {
     return Math.round((completedSetsCount.value / totalSetsCount.value) * 100)
   })
 
+  function clearState() {
+    workout.value = null
+    exercises.value = []
+    sets.value.clear()
+    previousData.value.clear()
+  }
+
   // Actions
   async function startWorkoutFromTemplate(templateId: string) {
     isLoading.value = true
 
     try {
+      clearState()
       const { data: { user } } = await supabase.auth.getUser()
       if (!user) throw new Error('Not authenticated')
 
@@ -97,7 +105,8 @@ export const useActiveWorkoutStore = defineStore('activeWorkout', () => {
           .insert({
             workout_id: newWorkout.id,
             exercise_id: te.exercise_id,
-            order_index: te.order_index
+            order_index: te.order_index,
+            notes: te.notes
           })
           .select(`
             *,
@@ -220,10 +229,7 @@ export const useActiveWorkoutStore = defineStore('activeWorkout', () => {
     if (error) throw error
 
     // Clear state
-    workout.value = null
-    exercises.value = []
-    sets.value.clear()
-    previousData.value.clear()
+    clearState()
   }
 
   async function cancelWorkout() {
@@ -239,15 +245,14 @@ export const useActiveWorkoutStore = defineStore('activeWorkout', () => {
     if (error) throw error
 
     // Clear state
-    workout.value = null
-    exercises.value = []
-    sets.value.clear()
-    previousData.value.clear()
+    clearState()
   }
 
   async function resumeWorkout() {
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) return
+
+    clearState()
 
     // Check for in-progress workout
     const { data: inProgressWorkout } = await supabase
@@ -297,6 +302,93 @@ export const useActiveWorkoutStore = defineStore('activeWorkout', () => {
     return previousData.value.get(workoutExerciseId) || []
   }
 
+  async function addExerciseToActiveWorkout(exercise: Exercise) {
+    if (!workout.value) throw new Error('No active workout')
+
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user) throw new Error('Not authenticated')
+
+    const { data: we, error: exerciseError } = await supabase
+      .from('workout_exercises')
+      .insert({
+        workout_id: workout.value.id,
+        exercise_id: exercise.id,
+        order_index: exercises.value.length,
+        notes: exercise.description || null
+      })
+      .select(`
+        *,
+        exercise:exercises(*)
+      `)
+      .single()
+
+    if (exerciseError) throw exerciseError
+
+    const prevSets = await fetchPreviousSets(exercise.id, user.id)
+    previousData.value.set(we.id, prevSets)
+
+    const setCount = Math.max(prevSets.length, 3)
+    const newSets: WorkoutSet[] = []
+    for (let i = 1; i <= setCount; i++) {
+      const prevSet = prevSets[i - 1]
+      const { data: setData, error: setError } = await supabase
+        .from('workout_sets')
+        .insert({
+          workout_exercise_id: we.id,
+          set_number: i,
+          target_weight: prevSet?.actual_weight ?? null,
+          target_reps: prevSet?.actual_reps ?? 8,
+          is_completed: false
+        })
+        .select()
+        .single()
+
+      if (setError) throw setError
+      if (setData) {
+        newSets.push(setData as WorkoutSet)
+      }
+    }
+
+    sets.value.set(we.id, newSets)
+    exercises.value.push(we as WorkoutExercise)
+  }
+
+  async function skipIncompleteSetsForExercise(workoutExerciseId: string) {
+    const exerciseSets = sets.value.get(workoutExerciseId) || []
+    const incompleteSetIds = exerciseSets.filter(s => !s.is_completed).map(s => s.id)
+
+    if (incompleteSetIds.length === 0) return
+
+    const { data, error } = await supabase
+      .from('workout_sets')
+      .update({
+        actual_weight: 0,
+        actual_reps: 0,
+        is_completed: true,
+        completed_at: new Date().toISOString(),
+        notes: 'skipped'
+      })
+      .in('id', incompleteSetIds)
+      .select()
+
+    if (error) throw error
+
+    const updatedSets = exerciseSets.map(set => {
+      const updated = data?.find(s => s.id === set.id)
+      return updated || set
+    })
+
+    sets.value.set(workoutExerciseId, updatedSets)
+  }
+
+  async function finishWorkoutEarly() {
+    // Mark any remaining sets as skipped before finishing
+    for (const exercise of exercises.value) {
+      await skipIncompleteSetsForExercise(exercise.id)
+    }
+    await finishWorkout()
+  }
+
   return {
     workout,
     exercises,
@@ -315,6 +407,9 @@ export const useActiveWorkoutStore = defineStore('activeWorkout', () => {
     cancelWorkout,
     resumeWorkout,
     getSetsForExercise,
-    getPreviousSetsForExercise
+    getPreviousSetsForExercise,
+    addExerciseToActiveWorkout,
+    skipIncompleteSetsForExercise,
+    finishWorkoutEarly
   }
 })

@@ -1,5 +1,6 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
+import { useActiveWorkoutStore } from '@/stores/activeWorkout'
 
 const routes = [
   {
@@ -76,10 +77,22 @@ const router = createRouter({
 // Navigation guard
 router.beforeEach(async (to, _from, next) => {
   const authStore = useAuthStore()
+  const activeWorkout = useActiveWorkoutStore()
 
   // Wait for auth to initialize on first load
   if (authStore.loading) {
     await authStore.initialize()
+  }
+
+  if (to.name === 'home') {
+    if (!activeWorkout.isActive) {
+      await activeWorkout.resumeWorkout()
+    }
+
+    if (activeWorkout.isActive) {
+      next({ name: 'workout' })
+      return
+    }
   }
 
   if (to.meta.requiresAuth && !authStore.isAuthenticated) {
